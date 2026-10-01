@@ -1,0 +1,111 @@
+// MongoDB requires a replica set for Prisma writes (MongoDB Atlas has one by default).
+// Schema changes are applied with `npx prisma db push` — Prisma Migrate does not support MongoDB.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+enum Category {
+  CONCERT
+  THEATRE
+  ARTS
+  FAMILY
+  NIGHTLIFE
+  SPORTS
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  EXPIRED
+  REFUNDED
+}
+
+type Venue {
+  name    String
+  address String
+  city    String @default("Los Angeles")
+  timezone String @default("America/Los_Angeles")
+}
+
+model Event {
+  id          String       @id @default(auto()) @map("_id") @db.ObjectId
+  slug        String       @unique
+  title       String
+  description String
+  category    Category
+  venue       Venue
+  startsAt    DateTime
+  imageUrl    String?
+  published   Boolean      @default(true)
+  // Set for events imported from Ticketmaster. Those are sold on Ticketmaster, not here,
+  // so they have no ticket types and link out instead.
+  externalUrl String?
+  ticketTypes TicketType[]
+  orders      Order[]
+  createdAt   DateTime     @default(now())
+
+  @@index([category, startsAt])
+}
+
+model TicketType {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  eventId    String   @db.ObjectId
+  event      Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  name       String
+  priceCents Int
+  capacity   Int
+  // Remaining inventory. Decremented atomically when a hold is placed,
+  // incremented back when a hold expires. Never compute this from other fields.
+  available  Int
+  maxPerOrder Int     @default(8)
+  tickets    Ticket[]
+
+  @@index([eventId])
+}
+
+type OrderItem {
+  ticketTypeId String @db.ObjectId
+  name         String
+  quantity     Int
+  priceCents   Int
+}
+
+model Order {
+  id              String      @id @default(auto()) @map("_id") @db.ObjectId
+  eventId         String      @db.ObjectId
+  event           Event       @relation(fields: [eventId], references: [id])
+  email           String
+  items           OrderItem[]
+  totalCents      Int
+  status          OrderStatus @default(PENDING)
+  // Secret in the order URL so guests can view their tickets without an account.
+  accessToken     String      @unique
+  stripeSessionId String?     @unique
+  expiresAt       DateTime
+  paidAt          DateTime?
+  tickets         Ticket[]
+  createdAt       DateTime    @default(now())
+
+  @@index([status, expiresAt])
+  @@index([email])
+}
+
+model Ticket {
+  id           String     @id @default(auto()) @map("_id") @db.ObjectId
+  orderId      String     @db.ObjectId
+  order        Order      @relation(fields: [orderId], references: [id])
+  ticketTypeId String     @db.ObjectId
+  ticketType   TicketType @relation(fields: [ticketTypeId], references: [id])
+  // Value encoded in the QR code and checked at the door.
+  code         String     @unique
+  checkedInAt  DateTime?
+  createdAt    DateTime   @default(now())
+
+  @@index([orderId])
+}
